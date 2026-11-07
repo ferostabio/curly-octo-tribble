@@ -6,7 +6,7 @@ import { db } from '@/db/client';
 import { uploadDocument, UploadError } from '@/api/documents';
 import { assertSession, refreshAccessToken, type Session } from '@/api/auth';
 import { createSerialExecutor } from '@/serial';
-import type { DocumentInput, QueuedDocument } from '@/queue';
+import { decodeQueue, type DocumentInput, type QueuedDocument } from '@/queue';
 
 const serialize = createSerialExecutor();
 function queueKey(session: Session) {
@@ -14,7 +14,7 @@ function queueKey(session: Session) {
 }
 async function loadQueue(session: Session): Promise<QueuedDocument[]> {
   const raw = await SecureStore.getItemAsync(queueKey(session));
-  return raw ? JSON.parse(raw) : [];
+  return raw === null ? [] : decodeQueue(raw, session.workerId);
 }
 async function persistQueue(session: Session, queue: QueuedDocument[]) {
   assertSession(session);

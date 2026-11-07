@@ -71,7 +71,7 @@ test('offline enqueue persists a document and ignores a duplicate checksum', asy
   await act(async () => { await result.current.enqueue(doc); });
   await act(async () => { await result.current.enqueue({ ...doc, id: 'duplicate' }); });
 
-  expect(mockStorage.get(queueKey)).toBe(JSON.stringify([doc]));
+  expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([doc]);
   expect(upload).not.toHaveBeenCalled();
 });
 
@@ -108,9 +108,7 @@ test('a failed upload stays queued with an incremented retry count, then succeed
 
   await renderHook(() => useDocumentSync(session));
 
-  await waitFor(() => expect(mockStorage.get(queueKey)).toBe(
-    JSON.stringify([{ ...doc, retries: 1 }]),
-  ));
+  await waitFor(() => expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([{ ...doc, retries: 1 }]));
   expect(getMockSyncResult(doc.id)).toBeUndefined();
   await act(async () => { await jest.advanceTimersByTimeAsync(30_000); });
   expect(getMockSyncResult(doc.id)?.synced).toBe(true);
@@ -138,7 +136,7 @@ test('logout aborts old uploads and another account cannot consume its queue', a
   finish();
   await renderHook(() => useDocumentSync(other));
   expect(session.controller.signal.aborted).toBe(true);
-  expect(mockStorage.get(queueKey)).toBe(JSON.stringify([doc]));
+  expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([doc]);
   expect(getMockSyncResult(doc.id)).toBeUndefined();
 });
 
@@ -155,7 +153,7 @@ test('concurrent enqueues from separate hook instances cannot overwrite each oth
   await act(async () => {
     await Promise.all([a.result.current.enqueue(sample('a')), b.result.current.enqueue(sample('b'))]);
   });
-  expect(mockStorage.get(queueKey)).toBe(JSON.stringify([sample('a'), sample('b')]));
+  expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([sample('a'), sample('b')]);
 });
 
 test('enqueue during an upload survives the flush snapshot being persisted', async () => {
@@ -167,7 +165,7 @@ test('enqueue during an upload survives the flush snapshot being persisted', asy
   const queued = result.current.enqueue(sample('during'));
   finish();
   await act(async () => { await queued; });
-  expect(mockStorage.get(queueKey)).toBe(JSON.stringify([sample('during')]));
+  expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([sample('during')]);
 });
 
 test.each([401, 422, 429, 503])('HTTP %s retains the item and classifies the failure', async (status) => {
@@ -177,7 +175,7 @@ test.each([401, 422, 429, 503])('HTTP %s retains the item and classifies the fai
   const { result } = await renderHook(() => useDocumentSync(session));
   const expected = status === 401 || status === 422
     ? { ...doc, state: 'blocked', error: 'Server error' } : { ...doc, retries: 11 };
-  await waitFor(() => expect(mockStorage.get(queueKey)).toBe(JSON.stringify([expected])));
+  await waitFor(() => expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([expected]));
   expect(result.current.syncError).toBe('Server error');
 });
 
@@ -193,4 +191,13 @@ test('background connectivity failures are reported without unhandled rejections
   jest.spyOn(NetInfo, 'fetch').mockRejectedValueOnce(new Error('Network unavailable'));
   const { result } = await renderHook(() => useDocumentSync(session));
   await waitFor(() => expect(result.current.syncError).toBe('Network unavailable'));
+});
+
+test.each(['{', '{}', '[null]', JSON.stringify([{ ...sample('bad'), retries: -1 }]),
+  JSON.stringify([{ ...sample('bad'), workerId: 'foreign' }])])('invalid stored queue is preserved: %s', async (raw) => {
+  mockStorage.set(queueKey, raw);
+  const { result } = await renderHook(() => useDocumentSync(session));
+  await waitFor(() => expect(result.current.syncError).toMatch('invalid'));
+  await expect(result.current.enqueue(sample('new'))).rejects.toThrow('invalid');
+  expect(mockStorage.get(queueKey)).toBe(raw);
 });
