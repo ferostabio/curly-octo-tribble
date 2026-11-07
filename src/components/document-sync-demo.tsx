@@ -1,10 +1,8 @@
 import { File, Paths } from 'expo-file-system';
 import { useEffect, useState } from 'react';
-import { Button, ScrollView, StyleSheet } from 'react-native';
+import { Button, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 
 import { initializeMockSession, type Session } from '@/api/auth';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
 import { getMockSyncResult } from '@/db/client';
 import { useDocumentSync } from '@/review';
 
@@ -15,6 +13,8 @@ type SessionState =
   | { kind: 'error'; message: string };
 
 export function DocumentSyncDemo() {
+  const dark = useColorScheme() === 'dark';
+  const color = dark ? '#fff' : '#000';
   const [session, setSession] = useState<SessionState>({ kind: 'idle' });
 
   async function startSession() {
@@ -27,26 +27,26 @@ export function DocumentSyncDemo() {
     }
   }
 
-  if (!__DEV__) return <ThemedText>Document sync demo is development-only.</ThemedText>;
+  if (!__DEV__) return <Text style={{ color }}>Document sync demo is development-only.</Text>;
 
   return (
-    <ThemedView style={styles.container}>
+    <View style={[styles.container, { backgroundColor: dark ? '#000' : '#fff' }]}>
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
-        <ThemedText type="title">Document sync demo</ThemedText>
-        <ThemedText>
+        <Text style={{ color }} role="heading">Document sync demo</Text>
+        <Text style={{ color }}>
           Runs review.ts with mock authentication, uploads, and database writes.
           Only synthetic files are used. No documents are sent to a server.
-        </ThemedText>
-        {session.kind === 'ready' ? <SyncControls session={session.session} /> : (
+        </Text>
+        {session.kind === 'ready' ? <SyncControls session={session.session} color={color} /> : (
           <Button title="Initialize mock session" onPress={startSession} disabled={session.kind === 'initializing'} />
         )}
-        {session.kind === 'error' && <ThemedText role="alert">{session.message}</ThemedText>}
+        {session.kind === 'error' && <Text style={{ color }} role="alert">{session.message}</Text>}
       </ScrollView>
-    </ThemedView>
+    </View>
   );
 }
 
-function SyncControls({ session }: { session: Session }) {
+function SyncControls({ session, color }: { session: Session; color: string }) {
   const { enqueue, syncError } = useDocumentSync(session);
   const [documentId, setDocumentId] = useState<string>();
   const [status, setStatus] = useState('Ready to queue a sample.');
@@ -82,10 +82,10 @@ function SyncControls({ session }: { session: Session }) {
 
   return (
     <>
-      {syncError && <ThemedText role="alert">{syncError}</ThemedText>}
+      {syncError && <Text style={{ color }} role="alert">{syncError}</Text>}
       <Button title="Queue sample document" onPress={queueSample} disabled={busy} />
-      <ThemedText accessibilityLiveRegion="polite">{status}</ThemedText>
-      {documentId && <ThemedText selectable>{documentId}</ThemedText>}
+      <Text style={{ color }} accessibilityLiveRegion="polite">{status}</Text>
+      {documentId && <Text style={{ color }} selectable>{documentId}</Text>}
     </>
   );
 }
