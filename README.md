@@ -6,15 +6,19 @@ Based on `../prep`. iOS bundle identifier and Android package: `com.expo.bowery`
 
 ## Setup
 
-This project currently uses pnpm, which we chose before we were aware of the YAML file.
-
-Requires Node.js 22.22+, pnpm 11.18, and Xcode (iOS) or Android Studio (Android).
+Requires Node.js 22.22+, npm 11.19.1, and Xcode (iOS) or Android Studio (Android).
 
 ```sh
-pnpm install
-pnpm ios       # Build and run on iOS simulator
-pnpm android   # Build and run on Android emulator
+npm install -g npm@11.19.1
+npm ci
+npm run ios       # Build and run on iOS simulator
+npm run android   # Build and run on Android emulator
 ```
+
+The project `.npmrc` requires package releases to be at least seven days old
+(`min-release-age=7`) when resolving dependencies, reducing exposure to newly
+published compromised releases. npm 11.19.1+ is required to enforce this policy.
+Commit `package-lock.json` after dependency changes; use `npm ci` for repeatable installs.
 
 iOS autolinking builds `expo-modules-core` from source through the Expo
 configuration in `package.json`. This avoids a precompiled framework with a
@@ -24,7 +28,7 @@ Podfile or Xcode changes are required.
 For subsequent sessions:
 
 ```sh
-pnpm expo start
+npm start
 ```
 
 ## Local document-sync mocks
@@ -46,24 +50,34 @@ The Home tab now runs the hook from `src/review.ts`:
 
 This is a development harness, not the full document-capture specification.
 `review.ts` binds queues and uploads to an explicit worker session; logout
-aborts ongoing sync. Queue reliability fixes are being applied incrementally. Demo files
+aborts ongoing sync. Failed items are retained, and invalid stored data is
+preserved for recovery. The queue uses transactional SQLCipher SQLite; only its
+random encryption key is stored in SecureStore. Existing account-scoped queues
+are migrated after validation; the unscoped legacy queue is left untouched
+because its owner cannot be safely inferred. Demo files
 contain no personal data and are not encrypted. Do not use real documents.
 The hook runs only while the demo controls are mounted; it does not implement
 background sync. Uploaded metadata and database results disappear on reload.
 
-Rebuild the development client with `pnpm ios` or `pnpm android` after installing
+Rebuild the development client with `npm run ios` or `npm run android` after installing
 native dependencies. In particular, an older client may report that the
-`ExpoSecureStore` native module is missing. The mocks reject production calls.
+`ExpoSecureStore` native module is missing. SQLCipher is enabled through the
+`expo-sqlite` config plugin and requires a new development build; Expo Go is not
+supported for encrypted queue storage. Startup fails rather than falling back
+to plaintext storage. The mocks reject production calls.
 
 Run the automated tests:
 
 ```sh
-pnpm test
-pnpm typecheck
+npm test
+npm run typecheck
+npm run lint
 ```
 
 The Jest/Expo tests run the actual hook and the demo screen against mocked
-SecureStore, file-system, and connectivity boundaries. They exercise successful
+SecureStore, file-system, and connectivity boundaries. The SQLite adapter tests
+use real in-memory SQL and transactions via Node’s `node:sqlite`; native
+SQLCipher encryption is not simulated. They exercise successful
 sync, offline persistence, duplicate detection, reconnection, token refresh,
 failed-upload retries, interval cleanup, and mock-session isolation. They do not
 verify native encryption, camera capture, signing, push delivery, or a backend.

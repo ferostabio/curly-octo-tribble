@@ -23,7 +23,8 @@
 
 ## Dependencies and native projects
 
-- Use pnpm and the project's scripts. Install libraries with `pnpm expo install <library>` to preserve Expo compatibility.
+- Use npm 11.19.1+ (11.x) and the project's scripts. Install libraries with `npx expo install <library> --npm` to preserve Expo compatibility.
+- Keep the seven-day minimum release age in `.npmrc` and commit `package-lock.json` after dependency changes. Use `npm ci` for repeatable installs.
 - Never edit `node_modules`.
 - Manage generated `ios/` and `android/` projects through Expo configuration and config plugins rather than manual native edits.
 

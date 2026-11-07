@@ -1,6 +1,7 @@
 import { render, screen, userEvent } from '@testing-library/react-native';
 
-import { signOut } from '@/api/auth';
+import { loadQueue } from '@/db/queue-store';
+import { initializeMockSession, signOut } from '@/api/auth';
 import { DocumentSyncDemo } from '@/components/document-sync-demo';
 
 const mockStorage = new Map<string, string>();
@@ -36,7 +37,7 @@ test('initializes a session, mounts the real sync hook, and reports the mock upl
   await user.press(screen.getByRole('button', { name: 'Queue sample document' }));
 
   expect(await screen.findByText('Synced: mock upload and database update completed.')).toBeOnTheScreen();
-  expect(mockStorage.get('pending_document_queue:demo-worker')).toBe('[]');
+  expect(await loadQueue(await initializeMockSession())).toEqual([]);
 });
 
 test('refuses to replace an existing non-mock session', async () => {

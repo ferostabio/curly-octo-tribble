@@ -1,25 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import * as SecureStore from 'expo-secure-store';
 import { File } from 'expo-file-system';
 import NetInfo from '@react-native-community/netinfo';
+import { loadQueue, persistQueue } from '@/db/queue-store';
 import { db } from '@/db/client';
 import { uploadDocument, UploadError } from '@/api/documents';
 import { assertSession, refreshAccessToken, type Session } from '@/api/auth';
 import { createSerialExecutor } from '@/serial';
-import { decodeQueue, type DocumentInput, type QueuedDocument } from '@/queue';
+import { type DocumentInput, type QueuedDocument } from '@/queue';
 
 const serialize = createSerialExecutor();
-function queueKey(session: Session) {
-  return `pending_document_queue:${encodeURIComponent(session.workerId)}`;
-}
-async function loadQueue(session: Session): Promise<QueuedDocument[]> {
-  const raw = await SecureStore.getItemAsync(queueKey(session));
-  return raw === null ? [] : decodeQueue(raw, session.workerId);
-}
-async function persistQueue(session: Session, queue: QueuedDocument[]) {
-  assertSession(session);
-  await SecureStore.setItemAsync(queueKey(session), JSON.stringify(queue));
-}
 async function getValidToken(session: Session) {
   assertSession(session);
   if (Date.now() >= session.expiresAt) {
@@ -92,7 +81,7 @@ export function useDocumentSync(session: Session) {
   }, [session, sync]);
   useEffect(() => {
     mounted.current = true;
-    void sync();
+    void Promise.resolve().then(() => { if (mounted.current) return sync(); });
     const timer = setInterval(() => { void sync(); }, 30_000);
     return () => { mounted.current = false; clearInterval(timer); };
   }, [sync]);

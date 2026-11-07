@@ -1,7 +1,8 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { QueuedDocument } from '@/queue';
-import { File } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
+import * as SQLite from 'expo-sqlite';
+import { loadQueue, persistQueue } from '@/db/queue-store';
 import NetInfo from '@react-native-community/netinfo';
 
 import * as documents from '@/api/documents';
@@ -59,7 +60,7 @@ test('mount runs review.ts, uploads queued data, records sync, and empties the q
     uri: doc.localUri, workerId: doc.workerId, idempotencyKey: doc.id,
     token: 'mock:demo-worker', signal: session.controller.signal,
   });
-  await waitFor(() => expect(mockStorage.get(queueKey)).toBe('[]'));
+  await waitFor(async () => expect(await loadQueue(session)).toEqual([]));
 });
 
 test('offline enqueue persists a document and ignores a duplicate checksum', async () => {
@@ -71,7 +72,7 @@ test('offline enqueue persists a document and ignores a duplicate checksum', asy
   await act(async () => { await result.current.enqueue(doc); });
   await act(async () => { await result.current.enqueue({ ...doc, id: 'duplicate' }); });
 
-  expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([doc]);
+  expect(await loadQueue(session)).toEqual([doc]);
   expect(upload).not.toHaveBeenCalled();
 });
 
@@ -86,7 +87,7 @@ test('a queued document syncs on the next polling interval after reconnecting', 
   await act(async () => { await jest.advanceTimersByTimeAsync(30_000); });
 
   expect(getMockSyncResult(doc.id)?.synced).toBe(true);
-  expect(mockStorage.get(queueKey)).toBe('[]');
+  expect(await loadQueue(session)).toEqual([]);
 });
 
 test('expired mock credentials refresh before upload', async () => {
@@ -108,11 +109,11 @@ test('a failed upload stays queued with an incremented retry count, then succeed
 
   await renderHook(() => useDocumentSync(session));
 
-  await waitFor(() => expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([{ ...doc, retries: 1 }]));
+  await waitFor(async () => expect(await loadQueue(session)).toEqual([{ ...doc, retries: 1 }]));
   expect(getMockSyncResult(doc.id)).toBeUndefined();
   await act(async () => { await jest.advanceTimersByTimeAsync(30_000); });
   expect(getMockSyncResult(doc.id)?.synced).toBe(true);
-  expect(mockStorage.get(queueKey)).toBe('[]');
+  expect(await loadQueue(session)).toEqual([]);
 });
 
 test('unmount removes the sync polling interval', async () => {
@@ -136,7 +137,9 @@ test('logout aborts old uploads and another account cannot consume its queue', a
   finish();
   await renderHook(() => useDocumentSync(other));
   expect(session.controller.signal.aborted).toBe(true);
-  expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([doc]);
+  expect(await loadQueue(other)).toEqual([]);
+  await signOut();
+  expect(await loadQueue(await initializeMockSession())).toEqual([doc]);
   expect(getMockSyncResult(doc.id)).toBeUndefined();
 });
 
@@ -153,7 +156,7 @@ test('concurrent enqueues from separate hook instances cannot overwrite each oth
   await act(async () => {
     await Promise.all([a.result.current.enqueue(sample('a')), b.result.current.enqueue(sample('b'))]);
   });
-  expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([sample('a'), sample('b')]);
+  expect(await loadQueue(session)).toEqual([sample('a'), sample('b')]);
 });
 
 test('enqueue during an upload survives the flush snapshot being persisted', async () => {
@@ -165,7 +168,7 @@ test('enqueue during an upload survives the flush snapshot being persisted', asy
   const queued = result.current.enqueue(sample('during'));
   finish();
   await act(async () => { await queued; });
-  expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([sample('during')]);
+  expect(await loadQueue(session)).toEqual([sample('during')]);
 });
 
 test.each([401, 422, 429, 503])('HTTP %s retains the item and classifies the failure', async (status) => {
@@ -175,7 +178,7 @@ test.each([401, 422, 429, 503])('HTTP %s retains the item and classifies the fai
   const { result } = await renderHook(() => useDocumentSync(session));
   const expected = status === 401 || status === 422
     ? { ...doc, state: 'blocked', error: 'Server error' } : { ...doc, retries: 11 };
-  await waitFor(() => expect(JSON.parse(mockStorage.get(queueKey) ?? '[]')).toEqual([expected]));
+  await waitFor(async () => expect(await loadQueue(session)).toEqual([expected]));
   expect(result.current.syncError).toBe('Server error');
 });
 
@@ -184,7 +187,7 @@ test('missing files are retained for recapture instead of silently discarded', a
   mockStorage.set(queueKey, JSON.stringify([sample('missing')]));
   const { result } = await renderHook(() => useDocumentSync(session));
   await waitFor(() => expect(result.current.syncError).toMatch('recapture'));
-  expect(mockStorage.get(queueKey)).toContain('"state":"blocked"');
+  expect((await loadQueue(session))[0].state).toBe('blocked');
 });
 
 test('background connectivity failures are reported without unhandled rejections', async () => {
@@ -200,4 +203,31 @@ test.each(['{', '{}', '[null]', JSON.stringify([{ ...sample('bad'), retries: -1 
   await waitFor(() => expect(result.current.syncError).toMatch('invalid'));
   await expect(result.current.enqueue(sample('new'))).rejects.toThrow('invalid');
   expect(mockStorage.get(queueKey)).toBe(raw);
+});
+
+test('large queues use SQLite and SecureStore retains no queue payload', async () => {
+  mockConnected = false;
+  const queue = Array.from({ length: 100 }, (_, i) => sample(`large-${i}`));
+  await persistQueue(session, queue);
+  expect(await loadQueue(session)).toEqual(queue);
+  expect(SecureStore.setItemAsync).not.toHaveBeenCalledWith(queueKey, expect.anything());
+});
+
+test('a failed SQLite transaction rolls back without losing the previous queue', async () => {
+  await persistQueue(session, [sample('original')]);
+  const db = await SQLite.openDatabaseAsync('document-queue.db');
+  jest.spyOn(db, 'runAsync').mockRejectedValueOnce(new Error('Disk full'));
+  await expect(persistQueue(session, [sample('replacement')])).rejects.toThrow('Disk full');
+  expect(await loadQueue(session)).toEqual([sample('original')]);
+});
+
+test('missing SQLCipher support fails closed instead of opening a plaintext queue', async () => {
+  await jest.isolateModulesAsync(async () => {
+    const sqlite = jest.requireMock<typeof import('expo-sqlite')>('expo-sqlite');
+    const db = await sqlite.openDatabaseAsync('document-queue.db');
+    jest.spyOn(db, 'getFirstAsync').mockResolvedValueOnce(null);
+    const auth = jest.requireActual<typeof import('@/api/auth')>('@/api/auth');
+    const store = jest.requireActual<typeof import('@/db/queue-store')>('@/db/queue-store');
+    await expect(store.loadQueue(await auth.initializeMockSession())).rejects.toThrow('SQLCipher');
+  });
 });

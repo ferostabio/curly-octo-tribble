@@ -13,7 +13,8 @@ on:
         default: 'all'
 
 env:
-  NODE_VERSION: '20.x'
+  NODE_VERSION: '22.22.0'
+  NPM_VERSION: '11.19.1'
   EXPO_CLI_VERSION: '0.18.13'
 
 jobs:
@@ -36,6 +37,8 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
+      - name: Setup npm
+        run: npm install -g npm@${{ env.NPM_VERSION }} --min-release-age=7
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
@@ -56,6 +59,8 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+      - name: Setup npm
+        run: npm install -g npm@${{ env.NPM_VERSION }} --min-release-age=7
       - run: npm ci
       - name: Decode keystore
         run: |
@@ -88,6 +93,8 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
+      - name: Setup npm
+        run: npm install -g npm@${{ env.NPM_VERSION }} --min-release-age=7
       - run: npm ci
       - name: Install pods
         working-directory: ios
@@ -142,9 +149,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
+      - name: Setup npm
+        run: npm install -g npm@${{ env.NPM_VERSION }} --min-release-age=7
       - run: npm ci
       - name: Install EAS CLI
-        run: npm install -g eas-cli@${{ env.EXPO_CLI_VERSION }}
+        run: npm install -g eas-cli@${{ env.EXPO_CLI_VERSION }} --min-release-age=7
       - name: Publish OTA update
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
