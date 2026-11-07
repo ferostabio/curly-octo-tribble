@@ -51,7 +51,8 @@ The Home tab now runs the hook from `src/review.ts`:
 This is a development harness, not the full document-capture specification.
 `review.ts` binds queues and uploads to an explicit worker session; logout
 aborts ongoing sync. Failed items are retained, and invalid stored data is
-preserved for recovery. The queue uses transactional SQLCipher SQLite; only its
+preserved for recovery. Server acknowledgements are saved before local
+confirmation; reconciliation retries do not upload the document again. The queue uses transactional SQLCipher SQLite; only its
 random encryption key is stored in SecureStore. Existing account-scoped queues
 are migrated after validation; the unscoped legacy queue is left untouched
 because its owner cannot be safely inferred. Demo files

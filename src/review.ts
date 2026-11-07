@@ -6,7 +6,7 @@ import { db } from '@/db/client';
 import { uploadDocument, UploadError } from '@/api/documents';
 import { assertSession, refreshAccessToken, type Session } from '@/api/auth';
 import { createSerialExecutor } from '@/serial';
-import { type DocumentInput, type QueuedDocument } from '@/queue';
+import type { DocumentInput } from '@/queue';
 
 const serialize = createSerialExecutor();
 async function getValidToken(session: Session) {
@@ -21,37 +21,51 @@ async function getValidToken(session: Session) {
 async function flushQueue(session: Session) {
   assertSession(session);
   if (!(await NetInfo.fetch()).isConnected) return null;
-  const remaining: QueuedDocument[] = [];
+  const queue = await loadQueue(session);
   let failure: string | null = null;
-  for (const doc of await loadQueue(session)) {
-    if (doc.state === 'blocked') {
-      remaining.push(doc);
-      failure = doc.error;
-      continue;
+  for (let index = 0; index < queue.length; index++) {
+    let doc = queue[index];
+    if (doc.state === 'blocked') { failure = doc.error; continue; }
+    if (doc.state === 'pending') {
+      try {
+        const token = await getValidToken(session);
+        if (!new File(doc.localUri).exists) throw new UploadError(422, 'Local file missing; recapture required');
+        const ack = await uploadDocument({
+          uri: doc.localUri, workerId: doc.workerId, idempotencyKey: doc.id,
+          token, signal: session.controller.signal,
+        });
+        assertSession(session);
+        if (ack.documentId !== doc.id || ack.workerId !== doc.workerId || !Number.isFinite(ack.uploadedAt)) {
+          throw new UploadError(502, 'Invalid server acknowledgement');
+        }
+        doc = { ...doc, state: 'uploaded', acknowledgedAt: ack.uploadedAt };
+      } catch (error: unknown) {
+        assertSession(session);
+        failure = error instanceof Error ? error.message : 'Upload failed';
+        const blocked = error instanceof UploadError && error.status < 500 && ![408, 429].includes(error.status);
+        queue[index] = blocked ? { ...doc, state: 'blocked', error: failure } : { ...doc, retries: doc.retries + 1 };
+        await persistQueue(session, queue);
+        continue;
+      }
+      queue[index] = doc;
+      await persistQueue(session, queue);
     }
     try {
-      const token = await getValidToken(session);
-      if (doc.workerId !== session.workerId) throw new UploadError(403, 'Queue owner mismatch');
-      if (!new File(doc.localUri).exists) throw new UploadError(422, 'Local file missing; recapture required');
-      await uploadDocument({
-        uri: doc.localUri, workerId: doc.workerId, idempotencyKey: doc.id,
-        token, signal: session.controller.signal,
-      });
       assertSession(session);
-      await db.runAsync(
+      const result = await db.runAsync(
         'UPDATE documents SET synced = 1, synced_at = ? WHERE local_id = ? AND worker_id = ?',
-        [Date.now(), doc.id, session.workerId],
+        [doc.acknowledgedAt, doc.id, session.workerId],
       );
+      if (result.changes !== 1) throw new Error('Local confirmation missing');
     } catch (error: unknown) {
       assertSession(session);
-      failure = error instanceof Error ? error.message : 'Sync failed';
-      const permanent = error instanceof UploadError && error.status < 500 && ![408, 429].includes(error.status);
-      remaining.push(permanent
-        ? { ...doc, state: 'blocked', error: failure }
-        : { ...doc, retries: doc.retries + 1 });
+      failure = error instanceof Error ? error.message : 'Local confirmation failed';
+      continue;
     }
+    assertSession(session);
+    queue.splice(index--, 1);
+    await persistQueue(session, queue);
   }
-  await persistQueue(session, remaining);
   return failure;
 }
 

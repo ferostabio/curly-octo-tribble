@@ -6,6 +6,7 @@ export type DocumentInput = {
 };
 export type QueuedDocument = DocumentInput & { retries: number } & (
   | { state: 'pending' }
+  | { state: 'uploaded'; acknowledgedAt: number }
   | { state: 'blocked'; error: string }
 );
 
@@ -22,6 +23,10 @@ function parseDocument(value: unknown): QueuedDocument {
   if (!('state' in value) || value.state === 'pending') return { ...base, state: 'pending' };
   if (value.state === 'blocked' && 'error' in value && typeof value.error === 'string') {
     return { ...base, state: 'blocked', error: value.error };
+  }
+  if (value.state === 'uploaded' && 'acknowledgedAt' in value &&
+    typeof value.acknowledgedAt === 'number' && Number.isFinite(value.acknowledgedAt)) {
+    return { ...base, state: 'uploaded', acknowledgedAt: value.acknowledgedAt };
   }
   throw new Error('Invalid state');
 }

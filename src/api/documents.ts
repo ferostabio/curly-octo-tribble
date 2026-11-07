@@ -11,9 +11,9 @@ type UploadDocumentInput = {
 };
 
 // In-memory mock: no network requests or durable document storage.
-const uploads = new Map<string, { uri: string; workerId: string }>();
+const uploads = new Map<string, { uri: string; workerId: string; uploadedAt: number }>();
 
-export async function uploadDocument(input: UploadDocumentInput): Promise<void> {
+export async function uploadDocument(input: UploadDocumentInput): Promise<{ documentId: string; workerId: string; uploadedAt: number }> {
   if (!__DEV__) throw new Error('Mock uploads are development-only');
   if (input.token !== `mock:${input.workerId}`) {
     throw new UploadError(401, 'Session expired');
@@ -28,8 +28,10 @@ export async function uploadDocument(input: UploadDocumentInput): Promise<void> 
     if (existing.uri !== input.uri || existing.workerId !== input.workerId) {
       throw new UploadError(422, 'Idempotency key already belongs to another document');
     }
-    return;
+    return { documentId: input.idempotencyKey, workerId: input.workerId, uploadedAt: existing.uploadedAt };
   }
 
-  uploads.set(key, { uri: input.uri, workerId: input.workerId });
+  const uploadedAt = Date.now();
+  uploads.set(key, { uri: input.uri, workerId: input.workerId, uploadedAt });
+  return { documentId: input.idempotencyKey, workerId: input.workerId, uploadedAt };
 }

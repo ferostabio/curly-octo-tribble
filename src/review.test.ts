@@ -6,7 +6,7 @@ import { loadQueue, persistQueue } from '@/db/queue-store';
 import NetInfo from '@react-native-community/netinfo';
 
 import * as documents from '@/api/documents';
-import { getMockSyncResult } from '@/db/client';
+import { db, getMockSyncResult } from '@/db/client';
 import { initializeMockSession, signOut, type Session } from '@/api/auth';
 import { useDocumentSync } from '@/review';
 
@@ -130,7 +130,9 @@ test('logout aborts old uploads and another account cannot consume its queue', a
   const doc = sample('account');
   mockStorage.set(queueKey, JSON.stringify([doc]));
   let finish = () => {};
-  jest.spyOn(documents, 'uploadDocument').mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+  jest.spyOn(documents, 'uploadDocument').mockImplementationOnce((input) => new Promise((resolve) => {
+    finish = () => resolve({ documentId: input.idempotencyKey, workerId: input.workerId, uploadedAt: Date.now() });
+  }));
   await renderHook(() => useDocumentSync(session));
   await signOut();
   const other = await initializeMockSession('other');
@@ -162,7 +164,9 @@ test('concurrent enqueues from separate hook instances cannot overwrite each oth
 test('enqueue during an upload survives the flush snapshot being persisted', async () => {
   mockStorage.set(queueKey, JSON.stringify([sample('slow')]));
   let finish = () => {};
-  jest.spyOn(documents, 'uploadDocument').mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+  jest.spyOn(documents, 'uploadDocument').mockImplementationOnce((input) => new Promise((resolve) => {
+    finish = () => resolve({ documentId: input.idempotencyKey, workerId: input.workerId, uploadedAt: Date.now() });
+  }));
   const { result } = await renderHook(() => useDocumentSync(session));
   mockConnected = false;
   const queued = result.current.enqueue(sample('during'));
@@ -230,4 +234,18 @@ test('missing SQLCipher support fails closed instead of opening a plaintext queu
     const store = jest.requireActual<typeof import('@/db/queue-store')>('@/db/queue-store');
     await expect(store.loadQueue(await auth.initializeMockSession())).rejects.toThrow('SQLCipher');
   });
+});
+
+test('local confirmation failures retry reconciliation without another upload, even after remount', async () => {
+  mockStorage.set(queueKey, JSON.stringify([sample('ack')]));
+  const upload = jest.spyOn(documents, 'uploadDocument');
+  jest.spyOn(db, 'runAsync').mockRejectedValueOnce(new Error('Local database unavailable'));
+  const hook = await renderHook(() => useDocumentSync(session));
+  await waitFor(() => expect(hook.result.current.syncError).toMatch('Local database'));
+  expect((await loadQueue(session))[0].state).toBe('uploaded');
+  await hook.unmount();
+  mockFileExists = false;
+  await renderHook(() => useDocumentSync(session));
+  await waitFor(() => expect(getMockSyncResult('ack')?.synced).toBe(true));
+  expect(upload).toHaveBeenCalledTimes(1);
 });
