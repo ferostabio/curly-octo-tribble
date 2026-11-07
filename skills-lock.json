@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "skills": {
+    "code-review": {
+      "source": "../prep/.agents/skills",
+      "sourceType": "local",
+      "computedHash": "cfad135b555982a85bfa4c7430882ba0f08009f29edf64271c45e67f24d50c69",
+      "installMode": "copy"
+    },
+    "codebase-design": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/codebase-design/SKILL.md",
+      "computedHash": "aa11a96c08451f4ff86052d5da94004a8c97bb4ea41b2ac8a4300c189f66c89c",
+      "installMode": "copy"
+    },
+    "expo-animation": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/expo/skills/expo-animation/SKILL.md",
+      "computedHash": "887ae52d885a9fe2c7d42cf684cd6ba10d410f44480c2501f822accb02b6c483",
+      "installMode": "copy"
+    },
+    "expo-native-ui": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/expo/skills/expo-native-ui/SKILL.md",
+      "computedHash": "49d480a3f3b5acd3c027bf2b3a12bcab601be14e9467c956697f9a88bd4fbca0",
+      "installMode": "copy"
+    },
+    "expo-router": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/expo/skills/expo-router/SKILL.md",
+      "computedHash": "8cd1a4358b14380b259b79e22c4170016a077ec316dc36a09f810efd8120ece3",
+      "installMode": "copy"
+    },
+    "expo-upgrade": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/expo/skills/expo-upgrade/SKILL.md",
+      "computedHash": "1a7b83fc0a5b7aa3552a194c57e1f046d85541e77130f3add7c358868f43f4e2",
+      "installMode": "copy"
+    },
+    "planning": {
+      "source": "../prep/.agents/skills",
+      "sourceType": "local",
+      "computedHash": "fa1e0ae9391a42cbd5cc0b60f2fc663ea721051384651e45894771412a7e881c",
+      "installMode": "copy"
+    },
+    "practical-patterns": {
+      "source": "../prep/.agents/skills",
+      "sourceType": "local",
+      "computedHash": "67459e972623953fa3a4c0c275f68208ff8dbde5ad63228113d5d1af5fc7a3c1",
+      "installMode": "copy"
+    },
+    "principle-boundary-discipline": {
+      "source": "cursor/plugins",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "pstack/skills/principle-boundary-discipline/SKILL.md",
+      "computedHash": "51f995752ff3bad613526eb7779872e01d01ac141a88c9ca050075a074ee5b70",
+      "installMode": "copy"
+    },
+    "principle-encode-lessons-in-structure": {
+      "source": "cursor/plugins",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "pstack/skills/principle-encode-lessons-in-structure/SKILL.md",
+      "computedHash": "200f578bf772cff030e7b18c582c935686375ddb6ebfe96b97bfee663434da21",
+      "installMode": "copy"
+    },
+    "principle-type-system-discipline": {
+      "source": "cursor/plugins",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "pstack/skills/principle-type-system-discipline/SKILL.md",
+      "computedHash": "3d9cd69afc4b41f99dd94b3dc169942995e721a73318f55412a858f9a66658fb",
+      "installMode": "copy"
+    },
+    "react-native-best-practices": {
+      "source": "callstackincubator/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/react-native-best-practices/SKILL.md",
+      "computedHash": "4b2b9561ff7b4b9d15ff76d2dd2a6191e3cdc7f36c06d171e377bfefcbcb2bfb",
+      "installMode": "copy"
+    },
+    "react-native-testing": {
+      "source": "callstack/react-native-testing-library",
+      "sourceType": "github",
+      "skillPath": "skills/react-native-testing/SKILL.md",
+      "computedHash": "bb30ad4660a42c71178c91d7a3f2e88556add9dba2213ee26f099dbe352fd649",
+      "installMode": "copy"
+    },
+    "typescript-best-practices": {
+      "source": "cursor/plugins",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "pstack/skills/typescript-best-practices/SKILL.md",
+      "computedHash": "2ef9e9307b23e38676b122330079a68315f87182e7fc308e263e3d2381090cb3",
+      "installMode": "copy"
+    }
+  }
+}
