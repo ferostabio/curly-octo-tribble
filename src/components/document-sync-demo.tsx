@@ -2,7 +2,7 @@ import { File, Paths } from 'expo-file-system';
 import { useEffect, useState } from 'react';
 import { Button, ScrollView, StyleSheet } from 'react-native';
 
-import { initializeMockSession } from '@/api/auth';
+import { initializeMockSession, type Session } from '@/api/auth';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { getMockSyncResult } from '@/db/client';
@@ -11,7 +11,7 @@ import { useDocumentSync } from '@/review';
 type SessionState =
   | { kind: 'idle' }
   | { kind: 'initializing' }
-  | { kind: 'ready' }
+  | { kind: 'ready'; session: Session }
   | { kind: 'error'; message: string };
 
 export function DocumentSyncDemo() {
@@ -20,8 +20,8 @@ export function DocumentSyncDemo() {
   async function startSession() {
     setSession({ kind: 'initializing' });
     try {
-      await initializeMockSession();
-      setSession({ kind: 'ready' });
+      const session = await initializeMockSession();
+      setSession({ kind: 'ready', session });
     } catch (error: unknown) {
       setSession({ kind: 'error', message: error instanceof Error ? error.message : 'Session failed' });
     }
@@ -37,7 +37,7 @@ export function DocumentSyncDemo() {
           Runs review.ts with mock authentication, uploads, and database writes.
           Only synthetic files are used. No documents are sent to a server.
         </ThemedText>
-        {session.kind === 'ready' ? <SyncControls /> : (
+        {session.kind === 'ready' ? <SyncControls session={session.session} /> : (
           <Button title="Initialize mock session" onPress={startSession} disabled={session.kind === 'initializing'} />
         )}
         {session.kind === 'error' && <ThemedText role="alert">{session.message}</ThemedText>}
@@ -46,8 +46,8 @@ export function DocumentSyncDemo() {
   );
 }
 
-function SyncControls() {
-  const { enqueue } = useDocumentSync();
+function SyncControls({ session }: { session: Session }) {
+  const { enqueue } = useDocumentSync(session);
   const [documentId, setDocumentId] = useState<string>();
   const [status, setStatus] = useState('Ready to queue a sample.');
   const [busy, setBusy] = useState(false);

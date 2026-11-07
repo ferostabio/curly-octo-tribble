@@ -45,8 +45,8 @@ The Home tab now runs the hook from `src/review.ts`:
    queued until the hook's next 30-second poll after connectivity returns.
 
 This is a development harness, not the full document-capture specification.
-`review.ts` is unchanged: its SecureStore queue, retry limit, missing-file
-handling, and concurrency behavior remain available for review. Demo files
+`review.ts` binds queues and uploads to an explicit worker session; logout
+aborts ongoing sync. Queue reliability fixes are being applied incrementally. Demo files
 contain no personal data and are not encrypted. Do not use real documents.
 The hook runs only while the demo controls are mounted; it does not implement
 background sync. Uploaded metadata and database results disappear on reload.

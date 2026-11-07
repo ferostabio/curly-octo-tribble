@@ -1,10 +1,12 @@
 import { render, screen, userEvent } from '@testing-library/react-native';
 
+import { signOut } from '@/api/auth';
 import { DocumentSyncDemo } from '@/components/document-sync-demo';
 
 const mockStorage = new Map<string, string>();
 
 jest.mock('expo-secure-store', () => ({
+  deleteItemAsync: jest.fn(async (key: string) => { mockStorage.delete(key); }),
   getItemAsync: jest.fn(async (key: string) => mockStorage.get(key) ?? null),
   setItemAsync: jest.fn(async (key: string, value: string) => { mockStorage.set(key, value); }),
 }));
@@ -19,7 +21,8 @@ jest.mock('expo-file-system', () => ({
   })),
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  await signOut();
   jest.useFakeTimers();
   mockStorage.clear();
 });
@@ -33,7 +36,7 @@ test('initializes a session, mounts the real sync hook, and reports the mock upl
   await user.press(screen.getByRole('button', { name: 'Queue sample document' }));
 
   expect(await screen.findByText('Synced: mock upload and database update completed.')).toBeOnTheScreen();
-  expect(mockStorage.get('pending_document_queue')).toBe('[]');
+  expect(mockStorage.get('pending_document_queue:demo-worker')).toBe('[]');
 });
 
 test('refuses to replace an existing non-mock session', async () => {
@@ -48,7 +51,7 @@ test('refuses to replace an existing non-mock session', async () => {
 });
 
 test('can reopen the demo with its existing mock session', async () => {
-  mockStorage.set('access_token', 'mock-bowery-access-token');
+  mockStorage.set('access_token', 'mock:demo-worker');
   const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTimeAsync });
   await render(<DocumentSyncDemo />);
   await user.press(screen.getByRole('button', { name: 'Initialize mock session' }));

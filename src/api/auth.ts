@@ -1,23 +1,51 @@
 import * as SecureStore from 'expo-secure-store';
 
-// Local development mock; these tokens are never sent to a server.
-export async function refreshAccessToken() {
-  if (!__DEV__) throw new Error('Mock authentication is development-only');
+export type Session = {
+  workerId: string;
+  accessToken: string;
+  expiresAt: number;
+  controller: AbortController;
+};
+let active: Session | undefined;
 
-  return {
-    accessToken: 'mock-bowery-access-token',
-    expiresAt: Date.now() + 60 * 60 * 1000,
-  };
+export function assertSession(session: Session) {
+  if (active !== session || session.controller.signal.aborted) throw new Error('Session ended');
 }
 
-// Call explicitly before exercising document sync; do not replace a real session.
-export async function initializeMockSession(): Promise<void> {
-  const session = await refreshAccessToken();
-  const existingToken = await SecureStore.getItemAsync('access_token');
-  if (existingToken && existingToken !== session.accessToken) {
-    throw new Error('A session already exists');
-  }
+export async function refreshAccessToken(session: Session) {
+  assertSession(session);
+  if (!__DEV__) throw new Error('Mock authentication is development-only');
+  return { accessToken: `mock:${session.workerId}`, expiresAt: Date.now() + 3_600_000 };
+}
 
-  await SecureStore.setItemAsync('access_token', session.accessToken);
-  await SecureStore.setItemAsync('token_expiry', String(session.expiresAt));
+export async function initializeMockSession(workerId = 'demo-worker'): Promise<Session> {
+  if (!__DEV__) throw new Error('Mock authentication is development-only');
+  if (active) {
+    assertSession(active);
+    if (active.workerId !== workerId) throw new Error('Sign out before switching accounts');
+    return active;
+  }
+  const session: Session = {
+    workerId, accessToken: `mock:${workerId}`, expiresAt: Date.now() + 3_600_000,
+    controller: new AbortController(),
+  };
+  active = session;
+  try {
+    const token = await SecureStore.getItemAsync('access_token');
+    assertSession(session);
+    if (token && token !== session.accessToken) throw new Error('A session already exists');
+    await SecureStore.setItemAsync('access_token', session.accessToken);
+    assertSession(session);
+    return session;
+  } catch (error) {
+    session.controller.abort();
+    if (active === session) active = undefined;
+    throw error;
+  }
+}
+
+export async function signOut() {
+  active?.controller.abort();
+  active = undefined;
+  await SecureStore.deleteItemAsync('access_token');
 }

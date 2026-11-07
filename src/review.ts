@@ -4,9 +4,11 @@ import { File } from 'expo-file-system';
 import NetInfo from '@react-native-community/netinfo';
 import { db } from '@/db/client';
 import { uploadDocument } from '@/api/documents';
-import { refreshAccessToken } from '@/api/auth';
+import { assertSession, refreshAccessToken, type Session } from '@/api/auth';
 
-const QUEUE_KEY = 'pending_document_queue';
+function queueKey(session: Session) {
+  return `pending_document_queue:${encodeURIComponent(session.workerId)}`;
+}
 const MAX_RETRIES = 3;
 
 type QueuedDocument = {
@@ -17,38 +19,39 @@ type QueuedDocument = {
   checksum: string;
 };
 
-async function loadQueue(): Promise<QueuedDocument[]> {
-  const raw = await SecureStore.getItemAsync(QUEUE_KEY);
+async function loadQueue(session: Session): Promise<QueuedDocument[]> {
+  const raw = await SecureStore.getItemAsync(queueKey(session));
   return raw ? JSON.parse(raw) : [];
 }
 
-async function persistQueue(queue: QueuedDocument[]): Promise<void> {
-  await SecureStore.setItemAsync(QUEUE_KEY, JSON.stringify(queue));
+async function persistQueue(session: Session, queue: QueuedDocument[]): Promise<void> {
+  assertSession(session);
+  await SecureStore.setItemAsync(queueKey(session), JSON.stringify(queue));
 }
 
-async function getValidToken(): Promise<string> {
-  const token = await SecureStore.getItemAsync('access_token');
-  const expiry = await SecureStore.getItemAsync('token_expiry');
-  if (!token || !expiry) throw new Error('No session');
-  if (Date.now() >= parseInt(expiry, 10)) {
-    const refreshed = await refreshAccessToken();
-    await SecureStore.setItemAsync('access_token', refreshed.accessToken);
-    await SecureStore.setItemAsync('token_expiry', String(refreshed.expiresAt));
-    return refreshed.accessToken;
+async function getValidToken(session: Session): Promise<string> {
+  assertSession(session);
+  if (Date.now() >= session.expiresAt) {
+    const refreshed = await refreshAccessToken(session);
+    assertSession(session);
+    Object.assign(session, refreshed);
   }
-  return token;
+  return session.accessToken;
 }
 
-async function flushQueue(): Promise<void> {
+async function flushQueue(session: Session): Promise<void> {
+  assertSession(session);
   const net = await NetInfo.fetch();
   if (!net.isConnected) return;
 
-  const queue = await loadQueue();
+  const queue = await loadQueue(session);
   const remaining: QueuedDocument[] = [];
 
   for (const doc of queue) {
     try {
-      const token = await getValidToken();
+      const token = await getValidToken(session);
+      assertSession(session);
+      if (doc.workerId !== session.workerId) throw new Error('Queue owner mismatch');
       const file = new File(doc.localUri);
       if (!file.exists) continue;
 
@@ -57,13 +60,16 @@ async function flushQueue(): Promise<void> {
         workerId: doc.workerId,
         idempotencyKey: doc.id,
         token,
+        signal: session.controller.signal,
       });
 
+      assertSession(session);
       await db.runAsync(
-        'UPDATE documents SET synced = 1, synced_at = ? WHERE local_id = ?',
-        [Date.now(), doc.id]
+        'UPDATE documents SET synced = 1, synced_at = ? WHERE local_id = ? AND worker_id = ?',
+        [Date.now(), doc.id, session.workerId]
       );
     } catch (err: any) {
+      assertSession(session);
       if (doc.retries < MAX_RETRIES) {
         remaining.push({ ...doc, retries: doc.retries + 1 });
       } else {
@@ -72,28 +78,31 @@ async function flushQueue(): Promise<void> {
     }
   }
 
-  await persistQueue(remaining);
+  assertSession(session);
+  await persistQueue(session, remaining);
 }
 
-export function useDocumentSync() {
+export function useDocumentSync(session: Session) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const enqueue = useCallback(async (doc: Omit<QueuedDocument, 'retries'>) => {
-    const queue = await loadQueue();
+    assertSession(session);
+    if (doc.workerId !== session.workerId) throw new Error('Document owner mismatch');
+    const queue = await loadQueue(session);
     const isDuplicate = queue.some((d) => d.checksum === doc.checksum);
     if (isDuplicate) return;
     queue.push({ ...doc, retries: 0 });
-    await persistQueue(queue);
-    flushQueue();
-  }, []);
+    await persistQueue(session, queue);
+    void flushQueue(session).catch(() => {});
+  }, [session]);
 
   useEffect(() => {
-    flushQueue();
-    intervalRef.current = setInterval(flushQueue, 30_000);
+    void flushQueue(session).catch(() => {});
+    intervalRef.current = setInterval(() => { void flushQueue(session).catch(() => {}); }, 30_000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, []);
+  }, [session]);
 
   return { enqueue };
 }

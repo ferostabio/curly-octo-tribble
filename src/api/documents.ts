@@ -3,6 +3,7 @@ type UploadDocumentInput = {
   workerId: string;
   idempotencyKey: string;
   token: string;
+  signal: AbortSignal;
 };
 
 // In-memory mock: no network requests or durable document storage.
@@ -10,11 +11,15 @@ const uploads = new Map<string, { uri: string; workerId: string }>();
 
 export async function uploadDocument(input: UploadDocumentInput): Promise<void> {
   if (!__DEV__) throw new Error('Mock uploads are development-only');
-  if (input.token !== 'mock-bowery-access-token') {
+  if (input.token !== `mock:${input.workerId}`) {
     throw new Error('Initialize a mock session before uploading');
   }
 
-  const existing = uploads.get(input.idempotencyKey);
+  input.signal.throwIfAborted();
+  await Promise.resolve();
+  input.signal.throwIfAborted();
+  const key = JSON.stringify([input.workerId, input.idempotencyKey]);
+  const existing = uploads.get(key);
   if (existing) {
     if (existing.uri !== input.uri || existing.workerId !== input.workerId) {
       throw new Error('Idempotency key already belongs to another document');
@@ -22,5 +27,5 @@ export async function uploadDocument(input: UploadDocumentInput): Promise<void> 
     return;
   }
 
-  uploads.set(input.idempotencyKey, { uri: input.uri, workerId: input.workerId });
+  uploads.set(key, { uri: input.uri, workerId: input.workerId });
 }
