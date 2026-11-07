@@ -1,44 +1,18 @@
-export type DocumentInput = {
-  id: string;
-  localUri: string;
-  workerId: string;
-  checksum: string;
-};
-export type QueuedDocument = DocumentInput & { retries: number } & (
-  | { state: 'pending' }
-  | { state: 'uploaded'; acknowledgedAt: number }
-  | { state: 'blocked'; error: string }
-);
+import { z } from 'zod';
 
-function parseDocument(value: unknown): QueuedDocument {
-  if (typeof value !== 'object' || value === null ||
-    !('id' in value) || typeof value.id !== 'string' || !value.id ||
-    !('workerId' in value) || typeof value.workerId !== 'string' || !value.workerId ||
-    !('localUri' in value) || typeof value.localUri !== 'string' || !value.localUri ||
-    !('checksum' in value) || typeof value.checksum !== 'string' || !value.checksum ||
-    !('retries' in value) || typeof value.retries !== 'number' ||
-    !Number.isSafeInteger(value.retries) || value.retries < 0) throw new Error('Invalid document');
-  const base = { id: value.id, workerId: value.workerId, localUri: value.localUri,
-    checksum: value.checksum, retries: value.retries };
-  if (!('state' in value) || value.state === 'pending') return { ...base, state: 'pending' };
-  if (value.state === 'blocked' && 'error' in value && typeof value.error === 'string') {
-    return { ...base, state: 'blocked', error: value.error };
-  }
-  if (value.state === 'uploaded' && 'acknowledgedAt' in value &&
-    typeof value.acknowledgedAt === 'number' && Number.isFinite(value.acknowledgedAt)) {
-    return { ...base, state: 'uploaded', acknowledgedAt: value.acknowledgedAt };
-  }
-  throw new Error('Invalid state');
-}
-
+const text = z.string().min(1);
+const document = z.object({ id: text, localUri: text, workerId: text, checksum: text });
+const queued = document.extend({ retries: z.int().nonnegative() }).and(z.union([
+  z.object({ state: z.literal('pending').default('pending') }),
+  z.object({ state: z.literal('uploaded'), acknowledgedAt: z.number().nonnegative() }),
+  z.object({ state: z.literal('blocked'), error: z.string() }),
+]));
+export type DocumentInput = z.infer<typeof document>;
+export type QueuedDocument = z.infer<typeof queued>;
 export function decodeQueue(raw: string, workerId: string): QueuedDocument[] {
   try {
-    const value: unknown = JSON.parse(raw);
-    if (!Array.isArray(value)) throw new Error('Expected queue');
-    const queue = value.map(parseDocument);
-    if (queue.some((doc) => doc.workerId !== workerId)) throw new Error('Owner mismatch');
+    const queue = z.array(queued).parse(JSON.parse(raw));
+    if (queue.some((doc) => doc.workerId !== workerId)) throw new Error();
     return queue;
-  } catch {
-    throw new Error('Stored queue is invalid; original data retained for recovery');
-  }
+  } catch { throw new Error('Stored queue is invalid; original data retained'); }
 }
