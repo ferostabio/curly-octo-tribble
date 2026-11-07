@@ -143,3 +143,25 @@ test('enqueue rejects documents owned by another account', async () => {
   const { result } = await renderHook(() => useDocumentSync(session));
   await expect(result.current.enqueue({ ...sample('foreign'), workerId: 'other' })).rejects.toThrow('owner');
 });
+
+test('concurrent enqueues from separate hook instances cannot overwrite each other', async () => {
+  mockConnected = false;
+  const a = await renderHook(() => useDocumentSync(session));
+  const b = await renderHook(() => useDocumentSync(session));
+  await act(async () => {
+    await Promise.all([a.result.current.enqueue(sample('a')), b.result.current.enqueue(sample('b'))]);
+  });
+  expect(mockStorage.get(queueKey)).toBe(JSON.stringify([sample('a'), sample('b')]));
+});
+
+test('enqueue during an upload survives the flush snapshot being persisted', async () => {
+  mockStorage.set(queueKey, JSON.stringify([sample('slow')]));
+  let finish = () => {};
+  jest.spyOn(documents, 'uploadDocument').mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const { result } = await renderHook(() => useDocumentSync(session));
+  mockConnected = false;
+  const queued = result.current.enqueue(sample('during'));
+  finish();
+  await act(async () => { await queued; });
+  expect(mockStorage.get(queueKey)).toBe(JSON.stringify([sample('during')]));
+});

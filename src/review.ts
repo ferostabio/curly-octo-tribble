@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { File } from 'expo-file-system';
 import NetInfo from '@react-native-community/netinfo';
+import { createSerialExecutor } from '@/serial';
 import { db } from '@/db/client';
 import { uploadDocument } from '@/api/documents';
 import { assertSession, refreshAccessToken, type Session } from '@/api/auth';
@@ -10,6 +11,7 @@ function queueKey(session: Session) {
   return `pending_document_queue:${encodeURIComponent(session.workerId)}`;
 }
 const MAX_RETRIES = 3;
+const serialize = createSerialExecutor();
 
 type QueuedDocument = {
   id: string;
@@ -82,23 +84,29 @@ async function flushQueue(session: Session): Promise<void> {
   await persistQueue(session, remaining);
 }
 
+function syncQueue(session: Session) {
+  return serialize(() => flushQueue(session));
+}
+
 export function useDocumentSync(session: Session) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const enqueue = useCallback(async (doc: Omit<QueuedDocument, 'retries'>) => {
-    assertSession(session);
-    if (doc.workerId !== session.workerId) throw new Error('Document owner mismatch');
-    const queue = await loadQueue(session);
-    const isDuplicate = queue.some((d) => d.checksum === doc.checksum);
-    if (isDuplicate) return;
-    queue.push({ ...doc, retries: 0 });
-    await persistQueue(session, queue);
-    void flushQueue(session).catch(() => {});
+    await serialize(async () => {
+      assertSession(session);
+      if (doc.workerId !== session.workerId) throw new Error('Document owner mismatch');
+      const queue = await loadQueue(session);
+      const isDuplicate = queue.some((d) => d.checksum === doc.checksum);
+      if (isDuplicate) return;
+      queue.push({ ...doc, retries: 0 });
+      await persistQueue(session, queue);
+    });
+    void syncQueue(session).catch(() => {});
   }, [session]);
 
   useEffect(() => {
-    void flushQueue(session).catch(() => {});
-    intervalRef.current = setInterval(() => { void flushQueue(session).catch(() => {}); }, 30_000);
+    void syncQueue(session).catch(() => {});
+    intervalRef.current = setInterval(() => { void syncQueue(session).catch(() => {}); }, 30_000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
