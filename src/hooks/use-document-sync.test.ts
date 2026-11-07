@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react-native';
 import NetInfo, { NetInfoStateType } from '@react-native-community/netinfo';
 import { initializeMockSession, signOut, type Session } from '@/api/auth';
-import { useDocumentSync } from '@/use-document-sync';
+import { useDocumentSync } from '@/hooks/use-document-sync';
 
 test('polling survives rerenders, switches sessions, and stops on unmount', async () => {
   await signOut();

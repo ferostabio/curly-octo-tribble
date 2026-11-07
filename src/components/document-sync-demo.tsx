@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Button, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 
 import { initializeMockSession, type Session } from '@/api/auth';
-import { useDocumentSync } from '@/use-document-sync';
+import { useDocumentSync } from '@/hooks/use-document-sync';
 
 type SessionState =
   | { kind: 'idle' }
