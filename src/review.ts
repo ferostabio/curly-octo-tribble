@@ -31,11 +31,11 @@ async function flushQueue(session: Session) {
         const token = await getValidToken(session);
         if (!new File(doc.localUri).exists) throw new UploadError(422, 'Local file missing; recapture required');
         const ack = await uploadDocument({
-          uri: doc.localUri, workerId: doc.workerId, idempotencyKey: doc.id,
+          uri: doc.localUri, workerId: doc.workerId, checksum: doc.checksum, idempotencyKey: doc.id,
           token, signal: session.controller.signal,
         });
         assertSession(session);
-        if (ack.documentId !== doc.id || ack.workerId !== doc.workerId || !Number.isFinite(ack.uploadedAt)) {
+        if (ack.documentId !== doc.id || ack.workerId !== doc.workerId || ack.checksum !== doc.checksum || !Number.isFinite(ack.uploadedAt)) {
           throw new UploadError(502, 'Invalid server acknowledgement');
         }
         doc = { ...doc, state: 'uploaded', acknowledgedAt: ack.uploadedAt };
@@ -87,7 +87,11 @@ export function useDocumentSync(session: Session) {
       assertSession(session);
       if (doc.workerId !== session.workerId) throw new Error('Document owner mismatch');
       const queue = await loadQueue(session);
-      if (queue.some((d) => d.checksum === doc.checksum)) return;
+      const existing = queue.find((item) => item.id === doc.id && item.workerId === doc.workerId);
+      if (existing) {
+        if (existing.checksum !== doc.checksum) throw new Error('Document content changed; use a new document ID');
+        return;
+      }
       queue.push({ ...doc, retries: 0, state: 'pending' });
       await persistQueue(session, queue);
     });

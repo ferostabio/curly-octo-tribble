@@ -58,21 +58,23 @@ test('mount runs review.ts, uploads queued data, records sync, and empties the q
   await waitFor(() => expect(getMockSyncResult(doc.id)?.synced).toBe(true));
   expect(upload).toHaveBeenCalledWith({
     uri: doc.localUri, workerId: doc.workerId, idempotencyKey: doc.id,
-    token: 'mock:demo-worker', signal: session.controller.signal,
+    checksum: doc.checksum, token: 'mock:demo-worker', signal: session.controller.signal,
   });
   await waitFor(async () => expect(await loadQueue(session)).toEqual([]));
 });
 
-test('offline enqueue persists a document and ignores a duplicate checksum', async () => {
+test('deduplication retains distinct identities with identical content', async () => {
   mockConnected = false;
   const upload = jest.spyOn(documents, 'uploadDocument');
   const { result } = await renderHook(() => useDocumentSync(session));
   const doc = sample('offline');
 
   await act(async () => { await result.current.enqueue(doc); });
-  await act(async () => { await result.current.enqueue({ ...doc, id: 'duplicate' }); });
+  await act(async () => { await result.current.enqueue(doc);
+    await result.current.enqueue({ ...doc, id: 'another' }); });
 
-  expect(await loadQueue(session)).toEqual([doc]);
+  expect(await loadQueue(session)).toEqual([doc, { ...doc, id: 'another' }]);
+  await expect(result.current.enqueue({ ...doc, checksum: 'changed' })).rejects.toThrow('new document ID');
   expect(upload).not.toHaveBeenCalled();
 });
 
@@ -131,7 +133,7 @@ test('logout aborts old uploads and another account cannot consume its queue', a
   mockStorage.set(queueKey, JSON.stringify([doc]));
   let finish = () => {};
   jest.spyOn(documents, 'uploadDocument').mockImplementationOnce((input) => new Promise((resolve) => {
-    finish = () => resolve({ documentId: input.idempotencyKey, workerId: input.workerId, uploadedAt: Date.now() });
+    finish = () => resolve({ documentId: input.idempotencyKey, workerId: input.workerId, checksum: input.checksum, uploadedAt: Date.now() });
   }));
   await renderHook(() => useDocumentSync(session));
   await signOut();
@@ -165,7 +167,7 @@ test('enqueue during an upload survives the flush snapshot being persisted', asy
   mockStorage.set(queueKey, JSON.stringify([sample('slow')]));
   let finish = () => {};
   jest.spyOn(documents, 'uploadDocument').mockImplementationOnce((input) => new Promise((resolve) => {
-    finish = () => resolve({ documentId: input.idempotencyKey, workerId: input.workerId, uploadedAt: Date.now() });
+    finish = () => resolve({ documentId: input.idempotencyKey, workerId: input.workerId, checksum: input.checksum, uploadedAt: Date.now() });
   }));
   const { result } = await renderHook(() => useDocumentSync(session));
   mockConnected = false;
