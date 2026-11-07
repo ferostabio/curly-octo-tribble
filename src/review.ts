@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
 import NetInfo from '@react-native-community/netinfo';
 import { loadQueue, persistQueue } from '@/db/queue-store';
@@ -69,20 +69,21 @@ async function flushQueue(session: Session) {
   return failure;
 }
 
+async function syncSession(session: Session) {
+  try { return await serialize(() => flushQueue(session)); }
+  catch (error) {
+    if (!session.controller.signal.aborted) return error instanceof Error ? error.message : 'Sync unavailable';
+  }
+}
+
 export function useDocumentSync(session: Session) {
   const [syncError, setSyncError] = useState<string | null>(null);
   const mounted = useRef(true);
-  const sync = useCallback(async () => {
-    try {
-      const error = await serialize(() => flushQueue(session));
-      if (mounted.current) setSyncError(error);
-    } catch (error: unknown) {
-      if (mounted.current && !session.controller.signal.aborted) {
-        setSyncError(error instanceof Error ? error.message : 'Sync unavailable');
-      }
-    }
-  }, [session]);
-  const enqueue = useCallback(async (doc: DocumentInput) => {
+  async function sync() {
+    const error = await syncSession(session);
+    if (mounted.current && error !== undefined) setSyncError(error);
+  }
+  async function enqueue(doc: DocumentInput) {
     await serialize(async () => {
       assertSession(session);
       if (doc.workerId !== session.workerId) throw new Error('Document owner mismatch');
@@ -96,12 +97,17 @@ export function useDocumentSync(session: Session) {
       await persistQueue(session, queue);
     });
     await sync();
-  }, [session, sync]);
+  }
   useEffect(() => {
+    let active = true;
     mounted.current = true;
-    void Promise.resolve().then(() => { if (mounted.current) return sync(); });
-    const timer = setInterval(() => { void sync(); }, 30_000);
-    return () => { mounted.current = false; clearInterval(timer); };
-  }, [sync]);
+    async function poll() {
+      const error = await syncSession(session);
+      if (active && error !== undefined) setSyncError(error);
+    }
+    void Promise.resolve().then(() => { if (active) return poll(); });
+    const timer = setInterval(() => { void poll(); }, 30_000);
+    return () => { active = false; mounted.current = false; clearInterval(timer); };
+  }, [session]);
   return { enqueue, sync, syncError };
 }

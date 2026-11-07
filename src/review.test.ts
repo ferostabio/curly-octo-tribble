@@ -251,3 +251,26 @@ test('local confirmation failures retry reconciliation without another upload, e
   await waitFor(() => expect(getMockSyncResult('ack')?.synced).toBe(true));
   expect(upload).toHaveBeenCalledTimes(1);
 });
+
+test('compiler keeps polling stable on rerenders and replaces it on account changes', async () => {
+  mockConnected = false;
+  const intervals = jest.spyOn(globalThis, 'setInterval');
+  const network = jest.spyOn(NetInfo, 'fetch');
+  const hook = await renderHook(({ account }: { account: Session }) => useDocumentSync(account), {
+    initialProps: { account: session },
+  });
+  await hook.rerender({ account: session });
+  network.mockRejectedValueOnce(new Error('Network unavailable'));
+  await act(async () => { await hook.result.current.sync(); });
+  expect(hook.result.current.syncError).toBe('Network unavailable');
+  expect(intervals.mock.calls.filter(([, delay]) => delay === 30_000)).toHaveLength(1);
+
+  await signOut();
+  const other = await initializeMockSession('new-worker');
+  await hook.rerender({ account: other });
+  expect(intervals.mock.calls.filter(([, delay]) => delay === 30_000)).toHaveLength(2);
+  await hook.unmount();
+  const calls = network.mock.calls.length;
+  await act(async () => { await jest.advanceTimersByTimeAsync(60_000); });
+  expect(network).toHaveBeenCalledTimes(calls);
+});
