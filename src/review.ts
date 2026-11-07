@@ -1,37 +1,26 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { File } from 'expo-file-system';
 import NetInfo from '@react-native-community/netinfo';
-import { createSerialExecutor } from '@/serial';
 import { db } from '@/db/client';
-import { uploadDocument } from '@/api/documents';
+import { uploadDocument, UploadError } from '@/api/documents';
 import { assertSession, refreshAccessToken, type Session } from '@/api/auth';
+import { createSerialExecutor } from '@/serial';
+import type { DocumentInput, QueuedDocument } from '@/queue';
 
+const serialize = createSerialExecutor();
 function queueKey(session: Session) {
   return `pending_document_queue:${encodeURIComponent(session.workerId)}`;
 }
-const MAX_RETRIES = 3;
-const serialize = createSerialExecutor();
-
-type QueuedDocument = {
-  id: string;
-  localUri: string;
-  workerId: string;
-  retries: number;
-  checksum: string;
-};
-
 async function loadQueue(session: Session): Promise<QueuedDocument[]> {
   const raw = await SecureStore.getItemAsync(queueKey(session));
   return raw ? JSON.parse(raw) : [];
 }
-
-async function persistQueue(session: Session, queue: QueuedDocument[]): Promise<void> {
+async function persistQueue(session: Session, queue: QueuedDocument[]) {
   assertSession(session);
   await SecureStore.setItemAsync(queueKey(session), JSON.stringify(queue));
 }
-
-async function getValidToken(session: Session): Promise<string> {
+async function getValidToken(session: Session) {
   assertSession(session);
   if (Date.now() >= session.expiresAt) {
     const refreshed = await refreshAccessToken(session);
@@ -40,77 +29,72 @@ async function getValidToken(session: Session): Promise<string> {
   }
   return session.accessToken;
 }
-
-async function flushQueue(session: Session): Promise<void> {
+async function flushQueue(session: Session) {
   assertSession(session);
-  const net = await NetInfo.fetch();
-  if (!net.isConnected) return;
-
-  const queue = await loadQueue(session);
+  if (!(await NetInfo.fetch()).isConnected) return null;
   const remaining: QueuedDocument[] = [];
-
-  for (const doc of queue) {
+  let failure: string | null = null;
+  for (const doc of await loadQueue(session)) {
+    if (doc.state === 'blocked') {
+      remaining.push(doc);
+      failure = doc.error;
+      continue;
+    }
     try {
       const token = await getValidToken(session);
-      assertSession(session);
-      if (doc.workerId !== session.workerId) throw new Error('Queue owner mismatch');
-      const file = new File(doc.localUri);
-      if (!file.exists) continue;
-
+      if (doc.workerId !== session.workerId) throw new UploadError(403, 'Queue owner mismatch');
+      if (!new File(doc.localUri).exists) throw new UploadError(422, 'Local file missing; recapture required');
       await uploadDocument({
-        uri: doc.localUri,
-        workerId: doc.workerId,
-        idempotencyKey: doc.id,
-        token,
-        signal: session.controller.signal,
+        uri: doc.localUri, workerId: doc.workerId, idempotencyKey: doc.id,
+        token, signal: session.controller.signal,
       });
-
       assertSession(session);
       await db.runAsync(
         'UPDATE documents SET synced = 1, synced_at = ? WHERE local_id = ? AND worker_id = ?',
-        [Date.now(), doc.id, session.workerId]
+        [Date.now(), doc.id, session.workerId],
       );
-    } catch (err: any) {
+    } catch (error: unknown) {
       assertSession(session);
-      if (doc.retries < MAX_RETRIES) {
-        remaining.push({ ...doc, retries: doc.retries + 1 });
-      } else {
-        console.warn(`Dropping document ${doc.id} after ${MAX_RETRIES} retries`, err?.message);
-      }
+      failure = error instanceof Error ? error.message : 'Sync failed';
+      const permanent = error instanceof UploadError && error.status < 500 && ![408, 429].includes(error.status);
+      remaining.push(permanent
+        ? { ...doc, state: 'blocked', error: failure }
+        : { ...doc, retries: doc.retries + 1 });
     }
   }
-
-  assertSession(session);
   await persistQueue(session, remaining);
-}
-
-function syncQueue(session: Session) {
-  return serialize(() => flushQueue(session));
+  return failure;
 }
 
 export function useDocumentSync(session: Session) {
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const enqueue = useCallback(async (doc: Omit<QueuedDocument, 'retries'>) => {
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const sync = useCallback(async () => {
+    try {
+      const error = await serialize(() => flushQueue(session));
+      if (mounted.current) setSyncError(error);
+    } catch (error: unknown) {
+      if (mounted.current && !session.controller.signal.aborted) {
+        setSyncError(error instanceof Error ? error.message : 'Sync unavailable');
+      }
+    }
+  }, [session]);
+  const enqueue = useCallback(async (doc: DocumentInput) => {
     await serialize(async () => {
       assertSession(session);
       if (doc.workerId !== session.workerId) throw new Error('Document owner mismatch');
       const queue = await loadQueue(session);
-      const isDuplicate = queue.some((d) => d.checksum === doc.checksum);
-      if (isDuplicate) return;
-      queue.push({ ...doc, retries: 0 });
+      if (queue.some((d) => d.checksum === doc.checksum)) return;
+      queue.push({ ...doc, retries: 0, state: 'pending' });
       await persistQueue(session, queue);
     });
-    void syncQueue(session).catch(() => {});
-  }, [session]);
-
+    await sync();
+  }, [session, sync]);
   useEffect(() => {
-    void syncQueue(session).catch(() => {});
-    intervalRef.current = setInterval(() => { void syncQueue(session).catch(() => {}); }, 30_000);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [session]);
-
-  return { enqueue };
+    mounted.current = true;
+    void sync();
+    const timer = setInterval(() => { void sync(); }, 30_000);
+    return () => { mounted.current = false; clearInterval(timer); };
+  }, [sync]);
+  return { enqueue, sync, syncError };
 }

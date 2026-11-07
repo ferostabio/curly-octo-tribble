@@ -1,4 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
+import type { QueuedDocument } from '@/queue';
+import { File } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
 import NetInfo from '@react-native-community/netinfo';
 
@@ -9,6 +11,7 @@ import { useDocumentSync } from '@/review';
 
 const mockStorage = new Map<string, string>();
 let mockConnected = true;
+let mockFileExists = true;
 let session: Session;
 const queueKey = 'pending_document_queue:demo-worker';
 
@@ -22,11 +25,11 @@ jest.mock('@react-native-community/netinfo', () => ({
   default: { fetch: jest.fn(async () => ({ isConnected: mockConnected })) },
 }));
 jest.mock('expo-file-system', () => ({
-  File: jest.fn().mockImplementation(() => ({ exists: true })),
+  File: jest.fn().mockImplementation(() => ({ get exists() { return mockFileExists; } })),
 }));
 
-function sample(id: string, retries = 0) {
-  return { id, localUri: `file:///mock/${id}.txt`, workerId: 'demo-worker', checksum: id, retries };
+function sample(id: string, retries = 0): QueuedDocument {
+  return { id, localUri: `file:///mock/${id}.txt`, workerId: 'demo-worker', checksum: id, retries, state: 'pending' };
 }
 
 beforeEach(async () => {
@@ -35,6 +38,7 @@ beforeEach(async () => {
   jest.clearAllMocks();
   mockStorage.clear();
   mockConnected = true;
+  mockFileExists = true;
   session = await initializeMockSession();
 });
 
@@ -164,4 +168,29 @@ test('enqueue during an upload survives the flush snapshot being persisted', asy
   finish();
   await act(async () => { await queued; });
   expect(mockStorage.get(queueKey)).toBe(JSON.stringify([sample('during')]));
+});
+
+test.each([401, 422, 429, 503])('HTTP %s retains the item and classifies the failure', async (status) => {
+  const doc = sample(`http-${status}`, 10);
+  mockStorage.set(queueKey, JSON.stringify([doc]));
+  jest.spyOn(documents, 'uploadDocument').mockRejectedValue(new documents.UploadError(status, 'Server error'));
+  const { result } = await renderHook(() => useDocumentSync(session));
+  const expected = status === 401 || status === 422
+    ? { ...doc, state: 'blocked', error: 'Server error' } : { ...doc, retries: 11 };
+  await waitFor(() => expect(mockStorage.get(queueKey)).toBe(JSON.stringify([expected])));
+  expect(result.current.syncError).toBe('Server error');
+});
+
+test('missing files are retained for recapture instead of silently discarded', async () => {
+  mockFileExists = false;
+  mockStorage.set(queueKey, JSON.stringify([sample('missing')]));
+  const { result } = await renderHook(() => useDocumentSync(session));
+  await waitFor(() => expect(result.current.syncError).toMatch('recapture'));
+  expect(mockStorage.get(queueKey)).toContain('"state":"blocked"');
+});
+
+test('background connectivity failures are reported without unhandled rejections', async () => {
+  jest.spyOn(NetInfo, 'fetch').mockRejectedValueOnce(new Error('Network unavailable'));
+  const { result } = await renderHook(() => useDocumentSync(session));
+  await waitFor(() => expect(result.current.syncError).toBe('Network unavailable'));
 });

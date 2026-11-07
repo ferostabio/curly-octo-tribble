@@ -1,3 +1,7 @@
+export class UploadError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
 type UploadDocumentInput = {
   uri: string;
   workerId: string;
@@ -12,7 +16,7 @@ const uploads = new Map<string, { uri: string; workerId: string }>();
 export async function uploadDocument(input: UploadDocumentInput): Promise<void> {
   if (!__DEV__) throw new Error('Mock uploads are development-only');
   if (input.token !== `mock:${input.workerId}`) {
-    throw new Error('Initialize a mock session before uploading');
+    throw new UploadError(401, 'Session expired');
   }
 
   input.signal.throwIfAborted();
@@ -22,7 +26,7 @@ export async function uploadDocument(input: UploadDocumentInput): Promise<void> 
   const existing = uploads.get(key);
   if (existing) {
     if (existing.uri !== input.uri || existing.workerId !== input.workerId) {
-      throw new Error('Idempotency key already belongs to another document');
+      throw new UploadError(422, 'Idempotency key already belongs to another document');
     }
     return;
   }

@@ -47,7 +47,7 @@ export function DocumentSyncDemo() {
 }
 
 function SyncControls({ session }: { session: Session }) {
-  const { enqueue } = useDocumentSync(session);
+  const { enqueue, syncError } = useDocumentSync(session);
   const [documentId, setDocumentId] = useState<string>();
   const [status, setStatus] = useState('Ready to queue a sample.');
   const [busy, setBusy] = useState(false);
@@ -82,6 +82,7 @@ function SyncControls({ session }: { session: Session }) {
 
   return (
     <>
+      {syncError && <ThemedText role="alert">{syncError}</ThemedText>}
       <Button title="Queue sample document" onPress={queueSample} disabled={busy} />
       <ThemedText accessibilityLiveRegion="polite">{status}</ThemedText>
       {documentId && <ThemedText selectable>{documentId}</ThemedText>}
