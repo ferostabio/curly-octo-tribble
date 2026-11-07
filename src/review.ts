@@ -1,81 +1,100 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
 import NetInfo from '@react-native-community/netinfo';
-import { loadQueue, saveDocument, removeDocument } from '@/db/queue-store';
+import { loadQueue, persistQueue } from '@/db/queue-store';
 import { db } from '@/db/client';
 import { uploadDocument, UploadError } from '@/api/documents';
-import { assertSession, getAccessToken, type Session } from '@/api/auth';
+import { assertSession, refreshAccessToken, type Session } from '@/api/auth';
 import { createSerialExecutor } from '@/serial';
 import type { DocumentInput } from '@/queue';
 
 const serialize = createSerialExecutor();
+async function getValidToken(session: Session) {
+  assertSession(session);
+  if (Date.now() >= session.expiresAt) {
+    const refreshed = await refreshAccessToken(session);
+    assertSession(session);
+    Object.assign(session, refreshed);
+  }
+  return session.accessToken;
+}
 async function flushQueue(session: Session) {
   assertSession(session);
+  if (!(await NetInfo.fetch()).isConnected) return null;
   const queue = await loadQueue(session);
-  const online = (await NetInfo.fetch()).isConnected;
   let failure: string | null = null;
-  for (let doc of queue) {
+  for (let index = 0; index < queue.length; index++) {
+    let doc = queue[index];
     if (doc.state === 'blocked') { failure = doc.error; continue; }
-    if (doc.state === 'pending' && !online) continue;
-    try {
-      if (doc.state === 'pending') {
-        const token = await getAccessToken(session);
-        if (!new File(doc.localUri).exists) throw new UploadError(422, 'Missing file; recapture required');
-        const ack = await uploadDocument({ ...doc, token, signal: session.controller.signal });
+    if (doc.state === 'pending') {
+      try {
+        const token = await getValidToken(session);
+        if (!new File(doc.localUri).exists) throw new UploadError(422, 'Local file missing; recapture required');
+        const ack = await uploadDocument({
+          uri: doc.localUri, workerId: doc.workerId, checksum: doc.checksum, idempotencyKey: doc.id,
+          token, signal: session.controller.signal,
+        });
         assertSession(session);
-        if (ack.id !== doc.id || ack.workerId !== doc.workerId || ack.checksum !== doc.checksum || !Number.isFinite(ack.uploadedAt)) {
-          throw new UploadError(502, 'Invalid acknowledgement');
+        if (ack.documentId !== doc.id || ack.workerId !== doc.workerId || ack.checksum !== doc.checksum || !Number.isFinite(ack.uploadedAt)) {
+          throw new UploadError(502, 'Invalid server acknowledgement');
         }
         doc = { ...doc, state: 'uploaded', acknowledgedAt: ack.uploadedAt };
-        await saveDocument(session, doc);
-      }
-      assertSession(session);
-      await db.confirm(session.workerId, doc.id, doc.acknowledgedAt);
-      assertSession(session);
-      await removeDocument(session, doc.id);
-    } catch (error) {
-      assertSession(session);
-      failure = String(error);
-      if (doc.state === 'pending') {
+      } catch (error: unknown) {
+        assertSession(session);
+        failure = error instanceof Error ? error.message : 'Upload failed';
         const blocked = error instanceof UploadError && error.status < 500 && ![408, 429].includes(error.status);
-        await saveDocument(session, blocked ? { ...doc, state: 'blocked', error: failure } : { ...doc, retries: doc.retries + 1 });
+        queue[index] = blocked ? { ...doc, state: 'blocked', error: failure } : { ...doc, retries: doc.retries + 1 };
+        await persistQueue(session, queue);
+        continue;
       }
+      queue[index] = doc;
+      await persistQueue(session, queue);
     }
+    try {
+      assertSession(session);
+      const result = await db.runAsync(
+        'UPDATE documents SET synced = 1, synced_at = ? WHERE local_id = ? AND worker_id = ?',
+        [doc.acknowledgedAt, doc.id, session.workerId],
+      );
+      if (result.changes !== 1) throw new Error('Local confirmation missing');
+    } catch (error: unknown) {
+      assertSession(session);
+      failure = error instanceof Error ? error.message : 'Local confirmation failed';
+      continue;
+    }
+    assertSession(session);
+    queue.splice(index--, 1);
+    await persistQueue(session, queue);
   }
-  return { syncError: failure ?? '', pending: (await loadQueue(session)).length };
+  return failure;
 }
 
-export function syncDocuments(session: Session) {
-  return serialize(() => flushQueue(session));
-}
-export function enqueueDocument(session: Session, doc: DocumentInput) {
-  return serialize(async () => {
-    assertSession(session);
-    if (doc.workerId !== session.workerId) throw new Error('Document owner mismatch');
-    const queue = await loadQueue(session);
-    const existing = queue.find((item) => item.id === doc.id && item.workerId === doc.workerId);
-    if (existing) {
-      if (existing.checksum !== doc.checksum) throw new Error('Document content changed; use a new document ID');
-      return;
-    }
-    await saveDocument(session, { ...doc, retries: 0, state: 'pending' });
-  });
-}
 export function useDocumentSync(session: Session) {
-  const [result, setResult] = useState({ syncError: '', pending: 0 });
+  const [syncError, setSyncError] = useState<string | null>(null);
   const mounted = useRef(true);
   const sync = useCallback(async () => {
     try {
-      const result = await syncDocuments(session);
-      if (mounted.current) setResult(result);
-    } catch (error) {
+      const error = await serialize(() => flushQueue(session));
+      if (mounted.current) setSyncError(error);
+    } catch (error: unknown) {
       if (mounted.current && !session.controller.signal.aborted) {
-        setResult((previous) => ({ ...previous, syncError: String(error) }));
+        setSyncError(error instanceof Error ? error.message : 'Sync unavailable');
       }
     }
   }, [session]);
   const enqueue = useCallback(async (doc: DocumentInput) => {
-    await enqueueDocument(session, doc);
+    await serialize(async () => {
+      assertSession(session);
+      if (doc.workerId !== session.workerId) throw new Error('Document owner mismatch');
+      const queue = await loadQueue(session);
+      const existing = queue.find((item) => item.id === doc.id && item.workerId === doc.workerId);
+      if (existing) {
+        if (existing.checksum !== doc.checksum) throw new Error('Document content changed; use a new document ID');
+        return;
+      }
+      queue.push({ ...doc, retries: 0, state: 'pending' });
+      await persistQueue(session, queue);
+    });
     await sync();
   }, [session, sync]);
   useEffect(() => {
@@ -84,5 +103,5 @@ export function useDocumentSync(session: Session) {
     const timer = setInterval(() => { void sync(); }, 30_000);
     return () => { mounted.current = false; clearInterval(timer); };
   }, [sync]);
-  return { enqueue, ...result };
+  return { enqueue, sync, syncError };
 }
