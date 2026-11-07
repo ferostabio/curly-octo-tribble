@@ -31,43 +31,24 @@ For subsequent sessions:
 npm start
 ```
 
-## Local document-sync mocks
+## Document-sync demo
 
-`src/review.ts` uses development-only API and database mocks in `src/api` and
-`src/db`. They make no network requests and keep uploaded-document metadata and
-sync results in memory, so those results disappear on reload.
+This is a basic development mock: authentication, uploads, and confirmation are
+simulated. Nothing is sent to a server; use synthetic documents only.
 
-The Home tab now runs the hook from `src/review.ts`:
+On launch, sync is idle. Tap **Initialize mock session** to start it: saved
+queue items sync immediately, then retry every 30 seconds while the screen is
+mounted. **Queue sample document** creates a synthetic file, saves it locally,
+and triggers sync. There is no background sync or camera capture.
 
-1. Tap **Initialize mock session**. This mounts the hook after creating a mock
-   session. An existing mock session can be reused; other sessions are never
-   overwritten.
-2. Tap **Queue sample document**. The app creates a synthetic text file in its
-   document directory and passes it to the real hook.
-3. The screen reports **Synced: mock upload and database update completed.**
-   after the mock database receives the hook's update. Offline samples remain
-   queued until the hook's next 30-second poll after connectivity returns.
+The queue uses SQLCipher SQLite with atomic document-level writes; only its
+random encryption key lives in SecureStore. Uploads do not block new queue
+writes. Failed items stay queued, and saved acknowledgements prevent duplicate
+uploads during reconciliation. There are no migrations. Sample files are not
+encrypted; mock upload and confirmation records disappear on reload.
 
-This is a development harness, not the full document-capture specification.
-`review.ts` binds queues and uploads to an explicit worker session; logout
-aborts ongoing sync. Failed items are retained, and invalid stored data is
-preserved for recovery. Server acknowledgements are saved before local
-confirmation; reconciliation retries do not upload the document again. The queue uses transactional SQLCipher SQLite; only its
-random encryption key is stored in SecureStore. Existing account-scoped queues
-are migrated after validation; the unscoped legacy queue is left untouched
-because its owner cannot be safely inferred. Demo files
-contain no personal data and are not encrypted. Do not use real documents.
-The hook runs only while the demo controls are mounted; it does not implement
-background sync. Uploaded metadata and database results disappear on reload.
-
-Rebuild the development client with `npm run ios` or `npm run android` after installing
-native dependencies. In particular, an older client may report that the
-`ExpoSecureStore` native module is missing. SQLCipher is enabled through the
-`expo-sqlite` config plugin and requires a new development build; Expo Go is not
-supported for encrypted queue storage. Startup fails rather than falling back
-to plaintext storage. The mocks reject production calls.
-
-Run the automated tests:
+Requires a development build with SQLCipher; Expo Go is unsupported. Rebuild
+with `npm run ios` or `npm run android` after native dependency changes.
 
 ```sh
 npm test
@@ -75,13 +56,9 @@ npm run typecheck
 npm run lint
 ```
 
-The Jest/Expo tests run the actual hook and the demo screen against mocked
-SecureStore, file-system, and connectivity boundaries. The SQLite adapter tests
-use real in-memory SQL and transactions via Node’s `node:sqlite`; native
-SQLCipher encryption is not simulated. They exercise successful
-sync, offline persistence, duplicate detection, reconnection, token refresh,
-failed-upload retries, interval cleanup, and mock-session isolation. They do not
-verify native encryption, camera capture, signing, push delivery, or a backend.
+Tests cover the processor, hook, and screen using real SecureStore key
+validation and in-memory SQLite transactions. Native encryption, a backend,
+and document capture are not simulated.
 
 ## React Native / Expo development skills
 

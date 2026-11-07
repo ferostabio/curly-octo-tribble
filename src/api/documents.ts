@@ -24,15 +24,10 @@ export async function uploadDocument(input: UploadDocumentInput): Promise<{ docu
   await Promise.resolve();
   input.signal.throwIfAborted();
   const key = JSON.stringify([input.workerId, input.idempotencyKey]);
-  const existing = uploads.get(key);
-  if (existing) {
-    if (existing.checksum !== input.checksum) {
-      throw new UploadError(422, 'Idempotency key already belongs to another document');
-    }
-    return { documentId: input.idempotencyKey, workerId: input.workerId, checksum: input.checksum, uploadedAt: existing.uploadedAt };
+  const upload = uploads.get(key) ?? { checksum: input.checksum, uploadedAt: Date.now() };
+  if (upload.checksum !== input.checksum) {
+    throw new UploadError(422, 'Idempotency key already belongs to another document');
   }
-
-  const uploadedAt = Date.now();
-  uploads.set(key, { checksum: input.checksum, uploadedAt });
-  return { documentId: input.idempotencyKey, workerId: input.workerId, checksum: input.checksum, uploadedAt };
+  uploads.set(key, upload);
+  return { documentId: input.idempotencyKey, workerId: input.workerId, checksum: input.checksum, uploadedAt: upload.uploadedAt };
 }

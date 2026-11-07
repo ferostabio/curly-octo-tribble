@@ -1,10 +1,9 @@
 import { File, Paths } from 'expo-file-system';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Button, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
 
 import { initializeMockSession, type Session } from '@/api/auth';
-import { getMockSyncResult } from '@/db/client';
-import { useDocumentSync } from '@/review';
+import { useDocumentSync } from '@/use-document-sync';
 
 type SessionState =
   | { kind: 'idle' }
@@ -34,7 +33,7 @@ export function DocumentSyncDemo() {
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
         <Text style={{ color }} role="heading">Document sync demo</Text>
         <Text style={{ color }}>
-          Runs review.ts with mock authentication, uploads, and database writes.
+          Uses mock authentication, uploads, and database writes.
           Only synthetic files are used. No documents are sent to a server.
         </Text>
         {session.kind === 'ready' ? <SyncControls session={session.session} color={color} /> : (
@@ -47,34 +46,27 @@ export function DocumentSyncDemo() {
 }
 
 function SyncControls({ session, color }: { session: Session; color: string }) {
-  const { enqueue, syncError } = useDocumentSync(session);
+  const { enqueue, syncError, pendingCount } = useDocumentSync(session);
   const [documentId, setDocumentId] = useState<string>();
-  const [status, setStatus] = useState('Ready to queue a sample.');
+  const [message, setMessage] = useState<string>();
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (!documentId) return;
-    const timer = setInterval(() => {
-      if (getMockSyncResult(documentId)) {
-        setStatus('Synced: mock upload and database update completed.');
-        clearInterval(timer);
-      }
-    }, 500);
-    return () => clearInterval(timer);
-  }, [documentId]);
+  const status = message ?? (!documentId ? 'Ready to queue a sample.' : pendingCount > 0
+    ? 'Queued. Waiting for sync; offline uploads retry every 30 seconds while this screen is mounted.'
+    : 'Synced: mock upload and database update completed.');
 
   async function queueSample() {
     setBusy(true);
+    setMessage(undefined);
     try {
       const id = `demo-${Date.now()}`;
       const file = new File(Paths.document, `${id}.txt`);
       file.create();
       file.write('Synthetic onboarding document. No personal data.');
+      await enqueue({ id, localUri: file.uri, workerId: session.workerId, checksum: id });
       setDocumentId(id);
-      await enqueue({ id, localUri: file.uri, workerId: 'demo-worker', checksum: id });
-      setStatus('Queued. Waiting for sync; offline uploads retry every 30 seconds while this screen is mounted.');
     } catch (error: unknown) {
-      setStatus(error instanceof Error ? error.message : 'Could not queue sample.');
+      setMessage(error instanceof Error ? error.message : 'Could not queue sample.');
     } finally {
       setBusy(false);
     }
